@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebGL 入门 - 彩色三角形</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      color: #eee;
+    }
+    canvas {
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #000;
+      box-shadow: 0 0 30px rgba(100, 100, 255, 0.15);
+    }
+    h1 {
+      margin-bottom: 16px;
+      font-weight: 300;
+      letter-spacing: 2px;
+    }
+    .info {
+      margin-top: 16px;
+      font-size: 13px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebGL - 你的第一个三角形</h1>
+  <canvas id="glCanvas" width="600" height="600"></canvas>
+  <p class="info">三角形顶点由 GLSL 着色器逐像素着色</p>
+
+  <script>
+    // ============================================================
+    // 第一步：获取 Canvas 和 WebGL 上下文
+    // ============================================================
+    // WebGL 的所有绘制都发生在一个 HTML Canvas 元素上。
+    // "webgl" 返回一个 WebGLRenderingContext 对象，
+    // 后续所有 GPU 操作都通过这个 context 进行。
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+
+    if (!gl) {
+      alert('你的浏览器不支持 WebGL，请使用 Chrome / Firefox / Edge');
+      throw new Error('WebGL not supported');
+    }
+
+    // ============================================================
+    // 第二步：编写着色器 (Shader)
+    // ============================================================
+    // 着色器是运行在 GPU 上的小程序，使用 GLSL 语言编写。
+    // WebGL 至少需要两种着色器：
+    //
+    // 顶点着色器 (Vertex Shader):
+    //   - 对每个顶点执行一次
+    //   - 负责确定顶点在屏幕上的位置
+    //   - 可以传递数据给片元着色器
+    //
+    // 片元着色器 (Fragment Shader):
+    //   - 对三角形内的每个像素执行一次
+    //   - 负责确定该像素的颜色
+
+    // ----- 顶点着色器 -----
+    const vertexShaderSource = `
+      // attribute: 从 JavaScript 传入的、每个顶点不同的数据
+      attribute vec2 a_position;   // 顶点坐标 (x, y)
+      attribute vec3 a_color;      // 顶点颜色 (r, g, b)，范围 0.0~1.0
+
+      // varying: 传递给片元着色器的数据，GPU 会自动在顶点之间插值
+      varying vec3 v_color;
+
+      void main() {
+        // gl_Position: 内置变量，定义顶点在裁剪空间中的最终位置
+        // vec4(x, y, z, w): 齐次坐标，w 通常为 1.0
+        gl_Position = vec4(a_position, 0.0, 1.0);
+
+        // 将颜色原样传递给片元着色器
+        v_color = a_color;
+      }
+    `;
+
+    // ----- 片元着色器 -----
+    const fragmentShaderSource = `
+      // precision mediump float: 必须声明浮点数精度
+      // mediump = 中等精度，平衡性能和质量
+      // 可选: lowp (低精度), highp (高精度)
+      precision mediump float;
+
+      // 接收从顶点着色器传来的插值后的颜色
+      varying vec3 v_color;
+
+      void main() {
+        // gl_FragColor: 内置变量，定义该像素的最终颜色 (r, g, b, a)
+        gl_FragColor = vec4(v_color, 1.0);
+      }
+    `;
+
+    // ============================================================
+    // 第三步：编译着色器
+    // ============================================================
+    // 着色器源码是字符串，需要在 GPU 上编译后才能使用
+
+    function createShader(gl, type, source) {
+      // gl.createShader 在 GPU 上创建一个空的着色器对象
+      const shader = gl.createShader(type);
+
+      // 将源码附加到着色器对象上
+      gl.shaderSource(shader, source);
+
+      // 编译着色器
+      gl.compileShader(shader);
+
+      // 检查编译是否成功
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const info = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw new Error('着色器编译失败: ' + info);
+      }
+      return shader;
+    }
+
+    // gl.VERTEX_SHADER 和 gl.FRAGMENT_SHADER 告诉 WebGL 这是什么类型的着色器
+    const vertexShader   = createShader(gl, gl.VERTEX_SHADER,   vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    // ============================================================
+    // 第四步：链接程序 (Program)
+    // ============================================================
+    // 将顶点着色器和片元着色器组合成一个可执行的 GPU 程序
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);    // 附加顶点着色器
+    gl.attachShader(program, fragmentShader);  // 附加片元着色器
+    gl.linkProgram(program);                   // 链接
+
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error('程序链接失败: ' + gl.getProgramInfoLog(program));
+    }
+
+    // 告诉 WebGL：从现在起使用这个程序来绘制
+    gl.useProgram(program);
+
+    // ============================================================
+    // 第五步：准备顶点数据
+    // ============================================================
+    // WebGL 的坐标系（裁剪空间）：
+    //
+    //        y = 1
+    //         ↑
+    //   (-1,1)├──────┬──────┤(1,1)
+    //         │      │      │
+    // x=-1 ───┼──────O──────┤ x=1
+    //   (-1,-1)├──────┴──────┤(1,-1)
+    //         │   y = -1
+    //
+    // 无论 Canvas 多大，这个坐标范围始终是 -1 到 1
+
+    // 三个三角形的顶点（包含坐标和颜色）：
+    //   坐标(x,y)    颜色(r,g,b)
+    //
+    //       顶点0 (顶部)
+    //          ●
+    //         / \
+    //        /   \
+    //   顶点1 ●─────● 顶点2 (右下)
+    //    (左下)
+    const vertices = new Float32Array([
+      // x     y     r     g     b
+       0.0,  0.7,  1.0,  0.0,  0.0,  // 顶点0: 顶部, 红色
+      -0.7, -0.5,  0.0,  1.0,  0.0,  // 顶点1: 左下, 绿色
+       0.7, -0.5,  0.0,  0.0,  1.0,  // 顶点2: 右下, 蓝色
+    ]);
+
+    // ============================================================
+    // 第六步：创建缓冲区 (Buffer) 并上传数据到 GPU
+    // ============================================================
+    // 缓冲区是 GPU 内存中的一块区域，用于存储顶点数据
+
+    const buffer = gl.createBuffer();
+
+    // gl.ARRAY_BUFFER: 表示这个缓冲区用于存储顶点属性数据
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+
+    // gl.STATIC_DRAW: 提示 GPU 这些数据不会频繁改变（优化提示）
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+    // ============================================================
+    // 第七步：配置顶点属性指针
+    // ============================================================
+    // 告诉 WebGL 如何解读缓冲区中的二进制数据
+
+    // 每个顶点占 5 个 float: x, y, r, g, b
+    const FLOAT_SIZE = vertices.BYTES_PER_ELEMENT;  // 4 字节
+    const STRIDE = 5 * FLOAT_SIZE;                  // 一个顶点 = 20 字节
+
+    // --- 属性 a_position (坐标) ---
+    // 获取着色器中 attribute 变量的位置（相当于"句柄"）
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(positionLoc);             // 启用该属性
+    gl.vertexAttribPointer(
+      positionLoc,    // 属性的位置
+      2,              // 每个顶点用几个分量 (x, y = 2)
+      gl.FLOAT,       // 数据类型
+      false,          // 不需要归一化
+      STRIDE,         // 步长：从一个顶点开头到下一个顶点开头的字节数
+      0               // 偏移量：坐标在顶点数据的起始位置（第0字节）
+    );
+
+    // --- 属性 a_color (颜色) ---
+    const colorLoc = gl.getAttribLocation(program, 'a_color');
+    gl.enableVertexAttribArray(colorLoc);
+    gl.vertexAttribPointer(
+      colorLoc,       // 属性的位置
+      3,              // 每个顶点用几个分量 (r, g, b = 3)
+      gl.FLOAT,       // 数据类型
+      false,          // 不需要归一化
+      STRIDE,         // 步长：同上
+      2 * FLOAT_SIZE  // 偏移量：颜色在坐标之后（第8字节处开始）
+    );
+
+    // ============================================================
+    // 第八步：清除画布并绘制
+    // ============================================================
+
+    // 设置清除颜色（深蓝黑色背景）
+    gl.clearColor(0.05, 0.05, 0.1, 1.0);
+
+    // 清除颜色缓冲区（用 clearColor 的颜色填充整个 Canvas）
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // 绘制三角形！
+    // gl.TRIANGLES: 每 3 个顶点组成一个三角形
+    // 0: 从第 0 个顶点开始
+    // 3: 使用 3 个顶点
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    console.log('✅ WebGL 三角形绘制成功！');
+  </script>
+</body>
+</html>
